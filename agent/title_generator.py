@@ -19,12 +19,39 @@ _TITLE_PROMPT = (
 )
 
 
+def _title_from_message(user_message: str) -> Optional[str]:
+    """Extract a title from the beginning of the user message (no LLM call)."""
+    text = (user_message or "").strip()
+    if not text:
+        return None
+    # Strip platform prefixes like "[Patryk] "
+    import re
+    text = re.sub(r"^\[.*?\]\s*", "", text)
+    # Take first sentence or first 50 chars
+    for sep in (".", "!", "?", "\n"):
+        idx = text.find(sep)
+        if 0 < idx <= 60:
+            text = text[:idx]
+            break
+    text = text[:50].strip()
+    if len(text) > 47:
+        text = text[:47] + "..."
+    return text if text else None
+
+
 def generate_title(user_message: str, assistant_response: str, timeout: float = 30.0) -> Optional[str]:
     """Generate a session title from the first exchange.
 
-    Uses the auxiliary LLM client (cheapest/fastest available model).
-    Returns the title string or None on failure.
+    When ``auxiliary.title_generation`` points to an unreachable endpoint or
+    the ``mode`` config is ``"extract"``, falls back to extracting a title
+    from the beginning of the user message (zero latency, no LLM call,
+    no KV-cache disruption on single-GPU setups).
     """
+    from hermes_cli.config import config as _cfg
+    _title_cfg = (_cfg.get("auxiliary") or {}).get("title_generation") or {}
+    if _title_cfg.get("mode") == "extract":
+        return _title_from_message(user_message)
+
     # Truncate long messages to keep the request small
     user_snippet = user_message[:500] if user_message else ""
     assistant_snippet = assistant_response[:500] if assistant_response else ""
@@ -52,8 +79,8 @@ def generate_title(user_message: str, assistant_response: str, timeout: float = 
             title = title[:77] + "..."
         return title if title else None
     except Exception as e:
-        logger.debug("Title generation failed: %s", e)
-        return None
+        logger.debug("Title generation failed, falling back to extraction: %s", e)
+        return _title_from_message(user_message)
 
 
 def auto_title_session(
