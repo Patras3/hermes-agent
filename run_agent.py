@@ -9047,8 +9047,9 @@ class AIAgent:
                 api_messages.append(api_msg)
 
             effective_system = self._cached_system_prompt or ""
-            if self.ephemeral_system_prompt:
-                effective_system = (effective_system + "\n\n" + self.ephemeral_system_prompt).strip()
+            # Ephemeral system prompt (session context, channel info) is
+            # injected into the first user message instead of the system
+            # prompt to preserve the KV-cache prefix across sessions.
             if effective_system:
                 api_messages = [{"role": "system", "content": effective_system}] + api_messages
             if self.prefill_messages:
@@ -9633,6 +9634,8 @@ class AIAgent:
                     _sess_meta = getattr(self, "_session_metadata_line", "")
                     if _sess_meta:
                         _injections.append(f"[{_sess_meta}]")
+                    if self.ephemeral_system_prompt:
+                        _injections.append(self.ephemeral_system_prompt)
                     if _ext_prefetch_cache:
                         _fenced = build_memory_context_block(_ext_prefetch_cache)
                         if _fenced:
@@ -9676,12 +9679,8 @@ class AIAgent:
             # External recall context is injected into the user message, not the system
             # prompt, so the stable cache prefix remains unchanged.
             effective_system = active_system_prompt or ""
-            if self.ephemeral_system_prompt:
-                effective_system = (effective_system + "\n\n" + self.ephemeral_system_prompt).strip()
-            # NOTE: Plugin context from pre_llm_call hooks is injected into the
-            # user message (see injection block above), NOT the system prompt.
-            # This is intentional — system prompt modifications break the prompt
-            # cache prefix.  The system prompt is reserved for Hermes internals.
+            # Ephemeral system prompt is now injected into user messages
+            # (see injection block above) to preserve the KV-cache prefix.
             if effective_system:
                 api_messages = [{"role": "system", "content": effective_system}] + api_messages
 
