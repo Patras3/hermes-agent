@@ -47,9 +47,13 @@ def generate_title(user_message: str, assistant_response: str, timeout: float = 
     from the beginning of the user message (zero latency, no LLM call,
     no KV-cache disruption on single-GPU setups).
     """
-    from hermes_cli.config import config as _cfg
-    _title_cfg = (_cfg.get("auxiliary") or {}).get("title_generation") or {}
-    if _title_cfg.get("mode") == "extract":
+    try:
+        from hermes_cli.config import load_config
+        _cfg = load_config()
+        _title_cfg = (_cfg.get("auxiliary") or {}).get("title_generation") or {}
+        if _title_cfg.get("mode") == "extract":
+            return _title_from_message(user_message)
+    except Exception:
         return _title_from_message(user_message)
 
     # Truncate long messages to keep the request small
