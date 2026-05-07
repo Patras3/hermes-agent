@@ -26,6 +26,26 @@ _TITLE_PROMPT = (
 )
 
 
+def _title_from_message(user_message: str) -> Optional[str]:
+    """Extract a title from the beginning of the user message (no LLM call)."""
+    text = (user_message or "").strip()
+    if not text:
+        return None
+    # Strip platform prefixes like "[Patryk] "
+    import re
+    text = re.sub(r"^\[.*?\]\s*", "", text)
+    # Take first sentence or first 50 chars
+    for sep in (".", "!", "?", "\n"):
+        idx = text.find(sep)
+        if 0 < idx <= 60:
+            text = text[:idx]
+            break
+    text = text[:50].strip()
+    if len(text) > 47:
+        text = text[:47] + "..."
+    return text if text else None
+
+
 def generate_title(
     user_message: str,
     assistant_response: str,
@@ -35,8 +55,13 @@ def generate_title(
 ) -> Optional[str]:
     """Generate a session title from the first exchange.
 
-    Uses the main runtime's model when available, falling back to the
-    auxiliary LLM client (cheapest/fastest available model).
+    When ``auxiliary.title_generation.mode`` is set to ``"extract"`` in the
+    Hermes config, skip the LLM call entirely and derive the title from the
+    beginning of the user message — zero latency, no second model loaded,
+    no KV-cache disruption on single-GPU setups.
+
+    Otherwise uses the main runtime's model when available, falling back to
+    the auxiliary LLM client (cheapest/fastest available model).
     Returns the title string or None on failure.
 
     ``failure_callback`` is invoked with ``(task, exception)`` when the
@@ -44,6 +69,16 @@ def generate_title(
     ``AIAgent._emit_auxiliary_failure`` so the user sees a warning instead
     of silently accumulating untitled sessions.
     """
+    try:
+        from hermes_cli.config import load_config
+        _cfg = load_config()
+        _title_cfg = (_cfg.get("auxiliary") or {}).get("title_generation") or {}
+        if _title_cfg.get("mode") == "extract":
+            return _title_from_message(user_message)
+    except Exception:
+        # Config loader not available in some embeddings — fall through.
+        pass
+
     # Truncate long messages to keep the request small
     user_snippet = user_message[:500] if user_message else ""
     assistant_snippet = assistant_response[:500] if assistant_response else ""
@@ -74,14 +109,15 @@ def generate_title(
     except Exception as e:
         # Log at WARNING so this shows up in agent.log without debug mode.
         # Full detail at debug level for operators who need the stack.
-        logger.warning("Title generation failed: %s", e)
+        logger.warning("Title generation failed, falling back to extraction: %s", e)
         logger.debug("Title generation traceback", exc_info=True)
         if failure_callback is not None:
             try:
                 failure_callback("title generation", e)
             except Exception:
                 logger.debug("Title generation failure_callback raised", exc_info=True)
-        return None
+        # Fall back to message extraction so the session still gets a title.
+        return _title_from_message(user_message)
 
 
 def auto_title_session(

@@ -1685,7 +1685,8 @@ class AIAgent:
         
         # Cached system prompt -- built once per session, only rebuilt on compression
         self._cached_system_prompt: Optional[str] = None
-        
+        self._session_metadata_line: str = ""
+
         # Filesystem checkpoint manager (transparent — not a tool)
         from tools.checkpoint_manager import CheckpointManager
         self._checkpoint_mgr = CheckpointManager(
@@ -5248,16 +5249,20 @@ class AIAgent:
             if context_files_prompt:
                 prompt_parts.append(context_files_prompt)
 
+        # Session metadata (timestamp, model, provider) is injected into the
+        # first user turn instead of the system prompt so the system-prompt
+        # prefix stays identical across sessions — enabling LLM KV-cache reuse
+        # and dramatically faster prompt evaluation on subsequent conversations.
         from hermes_time import now as _hermes_now
         now = _hermes_now()
-        timestamp_line = f"Conversation started: {now.strftime('%A, %B %d, %Y %I:%M %p')}"
+        _meta_parts = [f"Conversation started: {now.strftime('%A, %B %d, %Y %I:%M %p')}"]
         if self.pass_session_id and self.session_id:
-            timestamp_line += f"\nSession ID: {self.session_id}"
+            _meta_parts.append(f"Session ID: {self.session_id}")
         if self.model:
-            timestamp_line += f"\nModel: {self.model}"
+            _meta_parts.append(f"Model: {self.model}")
         if self.provider:
-            timestamp_line += f"\nProvider: {self.provider}"
-        prompt_parts.append(timestamp_line)
+            _meta_parts.append(f"Provider: {self.provider}")
+        self._session_metadata_line = "\n".join(_meta_parts)
 
         # Alibaba Coding Plan API always returns "glm-4.7" as model name regardless
         # of the requested model. Inject explicit model identity into the system prompt
@@ -11304,6 +11309,18 @@ class AIAgent:
                 # never mutated, so nothing leaks into session persistence.
                 if idx == current_turn_user_idx and msg.get("role") == "user":
                     _injections = []
+                    # Session metadata (timestamp, model) — kept out of the
+                    # system prompt so the KV-cache prefix stays identical
+                    # across sessions (see _build_system_prompt).
+                    _sess_meta = getattr(self, "_session_metadata_line", "")
+                    if _sess_meta:
+                        _injections.append(f"[{_sess_meta}]")
+                    # Ephemeral system prompt (per-session dynamic data such
+                    # as Discord thread IDs / channel names) is injected here
+                    # rather than appended to the system prompt — appending
+                    # would invalidate the KV-cache prefix every session.
+                    if self.ephemeral_system_prompt:
+                        _injections.append(self.ephemeral_system_prompt)
                     if _ext_prefetch_cache:
                         _fenced = build_memory_context_block(_ext_prefetch_cache)
                         if _fenced:
@@ -11338,13 +11355,11 @@ class AIAgent:
                 # The signature field helps maintain reasoning continuity
                 api_messages.append(api_msg)
 
-            # Build the final system message: cached prompt + ephemeral system prompt.
-            # Ephemeral additions are API-call-time only (not persisted to session DB).
-            # External recall context is injected into the user message, not the system
-            # prompt, so the stable cache prefix remains unchanged.
+            # Build the final system message: cached prompt only.
+            # Ephemeral system prompt is now injected into the user message
+            # (see injection block above) instead of the system prompt, so
+            # the stable cache prefix remains unchanged across sessions.
             effective_system = active_system_prompt or ""
-            if self.ephemeral_system_prompt:
-                effective_system = (effective_system + "\n\n" + self.ephemeral_system_prompt).strip()
             # NOTE: Plugin context from pre_llm_call hooks is injected into the
             # user message (see injection block above), NOT the system prompt.
             # This is intentional — system prompt modifications break the prompt
