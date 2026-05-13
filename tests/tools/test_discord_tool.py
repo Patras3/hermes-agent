@@ -215,6 +215,72 @@ class TestListChannels:
 
 
 # ---------------------------------------------------------------------------
+# Action: create_channel
+# ---------------------------------------------------------------------------
+
+class TestCreateChannel:
+    @patch("tools.discord_tool._discord_request")
+    def test_create_text_channel_with_parent_and_topic(self, mock_req, monkeypatch):
+        monkeypatch.setenv("DISCORD_BOT_TOKEN", "test-token")
+        mock_req.return_value = {
+            "id": "22",
+            "name": "infra",
+            "type": 0,
+            "guild_id": "111",
+            "parent_id": "10",
+            "topic": "Proxmox, Docker, Harbor, Authentik, sieć, DNS, certy",
+            "position": 3,
+        }
+
+        result = json.loads(discord_admin_handler(
+            action="create_channel",
+            guild_id="111",
+            name="infra",
+            channel_type="text",
+            parent_id="10",
+            topic="Proxmox, Docker, Harbor, Authentik, sieć, DNS, certy",
+            position=3,
+        ))
+
+        assert result["success"] is True
+        assert result["channel_id"] == "22"
+        assert result["type"] == "text"
+        assert result["parent_id"] == "10"
+        mock_req.assert_called_once_with(
+            "POST", "/guilds/111/channels", "test-token",
+            body={
+                "name": "infra",
+                "type": 0,
+                "parent_id": "10",
+                "topic": "Proxmox, Docker, Harbor, Authentik, sieć, DNS, certy",
+                "position": 3,
+            },
+        )
+
+    @patch("tools.discord_tool._discord_request")
+    def test_create_category_channel(self, mock_req, monkeypatch):
+        monkeypatch.setenv("DISCORD_BOT_TOKEN", "test-token")
+        mock_req.return_value = {
+            "id": "10", "name": "Ops / Dom", "type": 4, "guild_id": "111"
+        }
+
+        result = json.loads(discord_admin_handler(
+            action="create_channel",
+            guild_id="111",
+            name="Ops / Dom",
+            channel_type="category",
+        ))
+
+        assert result["success"] is True
+        assert result["channel_id"] == "10"
+        assert result["type"] == "category"
+        mock_req.assert_called_once_with(
+            "POST", "/guilds/111/channels", "test-token",
+            body={"name": "Ops / Dom", "type": 4},
+        )
+
+
+# ---------------------------------------------------------------------------
 # Action: list_roles
 # ---------------------------------------------------------------------------
 
