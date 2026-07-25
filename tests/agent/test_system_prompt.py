@@ -160,7 +160,6 @@ def test_coding_prompt_preserves_legacy_workspace_order(monkeypatch):
         expected_profile,
         "SYSTEM_MESSAGE",
         "CONTEXT_FILES",
-        "Conversation started: Friday, January 02, 2026",
     ))
 
     with (
@@ -183,6 +182,9 @@ def test_coding_prompt_preserves_legacy_workspace_order(monkeypatch):
 
     assert prompt == expected
     assert agent._cached_system_prompt_static == "\n\n".join(expected.split("\n\n")[:4])
+    assert agent._session_metadata_line.startswith(
+        "Conversation started: Friday, January 02, 2026"
+    )
 
 
 class TestTelegramRichMessagesHint:
