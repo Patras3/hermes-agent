@@ -274,6 +274,44 @@ function includesBlockingClarifyTrigger(value: unknown): boolean {
   return false
 }
 
+function contentText(value: unknown): string {
+  if (typeof value === 'string') {
+    return value
+  }
+
+  if (Array.isArray(value)) {
+    return value
+      .map(part => contentText(part))
+      .filter(Boolean)
+      .join('\n')
+  }
+
+  if (!value || typeof value !== 'object') {
+    return ''
+  }
+
+  const part = value as Record<string, unknown>
+  const text = part.text ?? part.content
+
+  if (typeof text === 'string') {
+    return text
+  }
+
+  return ''
+}
+
+function directUserPromptText(value: unknown): string {
+  const text = contentText(value)
+    .replace(/\n\n\[Conversation (?:started|continued):[\s\S]*?\]\s*$/u, '')
+    .trim()
+
+  if (/^User:\s/u.test(text) && /\n\nAssistant:\s/u.test(text)) {
+    return ''
+  }
+
+  return text
+}
+
 /**
  * Start the mock server on an ephemeral port.
  *
@@ -344,8 +382,10 @@ export function startMockServer(options: MockServerOptions = {}): Promise<MockSe
             .reverse()
             .find((message: { role?: unknown }) => message?.role === 'user')
 
-          if (typeof lastUserMessage?.content === 'string') {
-            receivedPrompts.push(lastUserMessage.content)
+          const lastUserText = directUserPromptText(lastUserMessage?.content)
+
+          if (lastUserText) {
+            receivedPrompts.push(lastUserText)
           }
 
           const stream = parsed.stream === true
@@ -364,19 +404,20 @@ export function startMockServer(options: MockServerOptions = {}): Promise<MockSe
           // "Hello, can you hear me?" etc.) never hit this path.
           const messages: any[] = Array.isArray(parsed.messages) ? parsed.messages : []
           const lastUserMsg = [...messages].reverse().find(m => m?.role === 'user')
-          const userText = typeof lastUserMsg?.content === 'string' ? lastUserMsg.content : ''
+          const userText = directUserPromptText(lastUserMsg?.content)
+          const rawUserText = contentText(lastUserMsg?.content)
           if (userText) {
             _receivedUserTexts.push(userText)
           }
-          const isInterimTrigger = userText.includes('E2E_INTERIM_TRIGGER')
-          const isSidebarTrigger = userText.includes('E2E_SIDEBAR_TRIGGER')
-          const isSidebarCrossTrigger = userText.includes('E2E_SIDEBAR_CROSS')
-          const isQueueStopTrigger = userText.includes('E2E_QUEUE_STOP_TRIGGER')
+          const isInterimTrigger = rawUserText.includes('E2E_INTERIM_TRIGGER')
+          const isSidebarTrigger = rawUserText.includes('E2E_SIDEBAR_TRIGGER')
+          const isSidebarCrossTrigger = rawUserText.includes('E2E_SIDEBAR_CROSS')
+          const isQueueStopTrigger = rawUserText.includes('E2E_QUEUE_STOP_TRIGGER')
           const isVerificationStopTrigger = messages.some(
-            message => typeof message?.content === 'string' && message.content.includes(VERIFICATION_STOP_TRIGGER),
+            message => contentText(message?.content).includes(VERIFICATION_STOP_TRIGGER),
           )
           const isCorrectionSwitchTrigger = messages.some(
-            message => typeof message?.content === 'string' && message.content.includes(CORRECTION_SWITCH_TRIGGER),
+            message => contentText(message?.content).includes(CORRECTION_SWITCH_TRIGGER),
           )
 
           if (includesBlockingClarifyTrigger(parsed.messages)) {
@@ -459,8 +500,7 @@ export function startMockServer(options: MockServerOptions = {}): Promise<MockSe
 
           if (stream) {
             const holdThisStream = Boolean(
-              options.holdFirstStreamForPrompt && typeof lastUserMessage?.content === 'string' &&
-                lastUserMessage.content.includes(options.holdFirstStreamForPrompt),
+              options.holdFirstStreamForPrompt && lastUserText.includes(options.holdFirstStreamForPrompt),
             )
             streamTextResponse(res, model, MOCK_REPLY, holdThisStream || holdThisCompletion ? () => {
               if (holdThisCompletion) {

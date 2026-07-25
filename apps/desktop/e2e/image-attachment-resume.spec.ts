@@ -89,8 +89,15 @@ async function setupSeededDesktop(): Promise<SeededFixture> {
   }
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 function sessionRow(page: Page) {
-  return page.locator('[data-slot="sidebar"] button').filter({ hasText: CAPTION }).first()
+  return page
+    .locator('[data-slot="sidebar"] button')
+    .filter({ hasText: new RegExp(`${escapeRegExp(SESSION_TITLE)}|${escapeRegExp(CAPTION)}`) })
+    .first()
 }
 
 async function openSeededSession(page: Page): Promise<void> {
@@ -147,13 +154,16 @@ test.describe('attached image resume', () => {
     fixture = await setupSeededDesktop()
     await waitForAppReady(fixture, 120_000)
 
-    // The sidebar labels a session by its preview, so the caption has to lead
-    // the persisted turn — a leading directive reads as a truncated file path.
+    // Recent desktop builds preserve an explicit session title in the sidebar;
+    // older ones fell back to the first persisted user-message preview.
     const row = sessionRow(fixture.page)
     await row.waitFor({ state: 'visible', timeout: 60_000 })
 
     const label = (await row.textContent())?.trim() ?? ''
-    expect(label.startsWith(CAPTION), `sidebar label should open with the caption: ${label}`).toBe(true)
+    expect(
+      label.startsWith(CAPTION) || label.includes(SESSION_TITLE),
+      `sidebar label should use the title or caption: ${label}`,
+    ).toBe(true)
 
     await openSeededSession(fixture.page)
     await assertRendersThumbnail(fixture.page, 'first open')
