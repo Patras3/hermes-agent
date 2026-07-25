@@ -10228,6 +10228,19 @@ def _ensure_fhs_path_guard() -> None:
         print("    (reload your shell or run 'source ~/.bashrc' to pick it up)")
 
 
+def _size_delta_label(saved_mb: float) -> str:
+    """Human label for a before/after database size delta, in MB.
+
+    A negative delta means the file GREW — concurrent session writes during a
+    long optimize can outweigh what the rebuild freed. Printing
+    "reclaimed -163.0 MB" for that reads as data loss, so say "grew by"
+    instead.
+    """
+    if saved_mb >= 0:
+        return f"reclaimed {saved_mb:.1f} MB"
+    return f"grew by {-saved_mb:.1f} MB"
+
+
 _PRE_UPDATE_SNAPSHOT_KEEP = 1
 
 # Per-file size cap for the pre-update quick snapshot. Anything larger is
@@ -11726,7 +11739,6 @@ def _cmd_update_impl(args, gateway_mode: bool):
                     _state_path,
                     check_header=True,
                     run_pragma=True,
-                    max_bytes=0,
                 )
                 if _state_ok.get("valid"):
                     logger.debug(
@@ -16340,10 +16352,10 @@ def main():
                 return
             output_dir = Path(args.output).expanduser() if args.output else get_hermes_home() / "session-exports"
 
-            def _export_one(session_id: str):
+            def _export_one(session_id: str, *, include_lineage: bool = False):
                 data = (
                     db.export_session_lineage(session_id)
-                    if getattr(args, "lineage", "single") == "logical"
+                    if include_lineage
                     else db.export_session(session_id)
                 )
                 if not data:
@@ -16367,36 +16379,93 @@ def main():
                 db.close()
                 return
 
+            lineage_is_logical = getattr(args, "lineage", "single") == "logical"
+
             if args.session_id:
                 resolved_session_id = db.resolve_session_id(args.session_id)
                 if not resolved_session_id:
                     print(f"Session '{args.session_id}' not found.")
                     db.close()
                     return
-                try:
-                    data, exported_path = _export_one(resolved_session_id)
-                except FileExistsError as e:
-                    print(f"Export already exists: {e}. Pass --force to overwrite.")
-                    db.close()
-                    return
-                if not data or not exported_path:
-                    print(f"Session '{args.session_id}' not found.")
-                    db.close()
-                    return
-                message_count = len(data.get("messages") or [])
-                suffix = "" if message_count == 1 else "s"
-                print(f"Exported 1 session ({message_count} message{suffix}) to {exported_path}")
+                delete_target_ids = [resolved_session_id]
                 if args.delete_after_verified:
-                    ok, reason = verify_export_file(exported_path, data)
-                    if not ok:
-                        print(f"Export verification failed; not deleting: {reason}")
+                    delete_target_ids = db.get_session_delete_targets(
+                        resolved_session_id
+                    )
+
+                exported_items = []
+                for target_id in delete_target_ids:
+                    try:
+                        data, exported_path = _export_one(
+                            target_id,
+                            include_lineage=(
+                                target_id == resolved_session_id
+                                and lineage_is_logical
+                            ),
+                        )
+                    except FileExistsError as e:
+                        print(
+                            f"Export already exists: {e}. "
+                            "Pass --force to overwrite."
+                        )
                         db.close()
                         return
+                    if not data or not exported_path:
+                        print(
+                            f"Session '{target_id}' disappeared during export; "
+                            "nothing was deleted."
+                        )
+                        db.close()
+                        return
+                    exported_items.append((data, exported_path))
+
+                message_count = sum(
+                    len(data.get("messages") or [])
+                    for data, _path in exported_items
+                )
+                suffix = "" if message_count == 1 else "s"
+                if len(exported_items) == 1:
+                    print(
+                        f"Exported 1 session ({message_count} message{suffix}) "
+                        f"to {exported_items[0][1]}"
+                    )
+                else:
+                    print(
+                        f"Exported {len(exported_items)} sessions "
+                        f"({message_count} message{suffix}) to {output_dir}"
+                    )
+                if args.delete_after_verified:
+                    for data, exported_path in exported_items:
+                        ok, reason = verify_export_file(exported_path, data)
+                        if not ok:
+                            print(
+                                "Export verification failed; not deleting "
+                                f"session '{data.get('id')}': {reason}"
+                            )
+                            db.close()
+                            return
                     sessions_dir = get_hermes_home() / "sessions"
-                    if db.delete_session(resolved_session_id, sessions_dir=sessions_dir):
-                        print(f"Deleted exported session '{resolved_session_id}'.")
+                    if db.delete_session(
+                        resolved_session_id,
+                        sessions_dir=sessions_dir,
+                        expected_delete_ids=delete_target_ids,
+                    ):
+                        delegate_count = len(delete_target_ids) - 1
+                        delegate_suffix = (
+                            ""
+                            if not delegate_count
+                            else f" and {delegate_count} delegate session"
+                            f"{'' if delegate_count == 1 else 's'}"
+                        )
+                        print(
+                            f"Deleted exported session '{resolved_session_id}'"
+                            f"{delegate_suffix}."
+                        )
                     else:
-                        print(f"Exported, but session '{resolved_session_id}' was not deleted because it was not found.")
+                        print(
+                            f"Exported, but session '{resolved_session_id}' was "
+                            "not deleted because its delegate set changed."
+                        )
                 db.close()
                 return
 
@@ -16422,7 +16491,10 @@ def main():
             exported = 0
             for row in candidates:
                 try:
-                    data, exported_path = _export_one(row["id"])
+                    data, exported_path = _export_one(
+                        row["id"],
+                        include_lineage=lineage_is_logical,
+                    )
                 except FileExistsError as e:
                     print(f"Skipping existing export: {e}. Pass --force to overwrite.")
                     continue
@@ -16615,11 +16687,18 @@ def main():
                 if db_path.exists()
                 else 0.0
             )
+            # Same WAL caveat as optimize-storage: after a VACUUM the main file
+            # on disk lags until the WAL is checkpointed back (refused while a
+            # live gateway holds a read-mark), so stat() understates the win and
+            # can go negative. SQLite's page accounting is correct immediately.
+            logical_after = db.logical_size_bytes()
+            if logical_after is not None:
+                after_mb = logical_after / (1024 * 1024)
             saved = before_mb - after_mb
             print(f"Optimized {n} FTS index(es).")
             print(
                 f"Database size: {before_mb:.1f} MB -> {after_mb:.1f} MB "
-                f"(reclaimed {saved:.1f} MB)"
+                f"({_size_delta_label(saved)})"
             )
 
         elif action == "optimize-storage":
@@ -16702,11 +16781,21 @@ def main():
             after_mb = (
                 os.path.getsize(db_path) / (1024 * 1024) if db_path.exists() else 0.0
             )
+            # Prefer SQLite's own page accounting over stat(). In WAL mode a
+            # VACUUM's rewrite sits in the -wal file until a checkpoint folds it
+            # back, and that checkpoint is refused while another connection (a
+            # live gateway) holds a read-mark — so the main file on disk still
+            # reads at its pre-VACUUM size and keeps growing. stat()ing it here
+            # reported "reclaimed -3820.1 MB" on a DB that had actually shrunk
+            # 60%. page_count * page_size is correct immediately.
+            logical_after = db.logical_size_bytes()
+            if logical_after is not None:
+                after_mb = logical_after / (1024 * 1024)
             saved = before_mb - after_mb
             print(f"\n✓ Search index optimized.")
             print(
                 f"  Database size: {before_mb:.1f} MB -> {after_mb:.1f} MB "
-                f"(reclaimed {saved:.1f} MB)"
+                f"({_size_delta_label(saved)})"
             )
             if result.get("vacuumed") is False:
                 print("  (VACUUM was skipped or failed — run "

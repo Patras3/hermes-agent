@@ -2811,6 +2811,21 @@ class SessionDB:
                 # reclaimed until a later VACUUM. Non-fatal.
                 logger.warning("VACUUM after FTS optimize failed: %s", exc)
                 vacuum_ok = False
+            # Best-effort: fold the WAL back into the main file so the on-disk
+            # size settles now rather than at close(). NOTE this is REFUSED
+            # (SQLITE_BUSY) while any other connection holds a WAL read-mark —
+            # e.g. a live gateway sharing the DB — so it is not sufficient on
+            # its own. Callers must therefore NOT size the result by stat()ing
+            # the file; use :meth:`logical_size_bytes`, which is truthful
+            # immediately regardless of readers.
+            try:
+                with self._lock:
+                    self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except Exception as exc:
+                logger.debug(
+                    "WAL checkpoint (TRUNCATE) after optimize VACUUM failed: %s",
+                    exc,
+                )
 
         # Phase 4: stamp the FTS storage layout as current, clear the "available"
         # flag, and advance schema_version if it was somehow still behind (the
@@ -8959,10 +8974,28 @@ class SessionDB:
         except OSError:
             pass
 
+    def get_session_delete_targets(self, session_id: str) -> List[str]:
+        """Return every session row that :meth:`delete_session` would remove.
+
+        The requested session is first, followed by its recursively discovered
+        delegate/subagent children. Branch and compression children are not
+        included because deletion preserves them by orphaning their parent
+        reference.
+        """
+        with self._lock:
+            exists = self._conn.execute(
+                "SELECT 1 FROM sessions WHERE id = ? LIMIT 1", (session_id,)
+            ).fetchone()
+            if not exists:
+                return []
+            delegate_ids = _collect_delegate_child_ids(self._conn, [session_id])
+        return [session_id, *sorted(delegate_ids)]
+
     def delete_session(
         self,
         session_id: str,
         sessions_dir: Optional[Path] = None,
+        expected_delete_ids: Optional[List[str]] = None,
     ) -> bool:
         """Delete a session and all its messages.
 
@@ -8972,9 +9005,18 @@ class SessionDB:
         (``parent_session_id → NULL``) so they remain accessible independently.
         When *sessions_dir* is provided, also removes on-disk transcript
         files (``.json`` / ``.jsonl`` / ``request_dump_*``) for every deleted
-        session. Returns True if the session was found and deleted.
+        session. When *expected_delete_ids* is provided, deletion proceeds only
+        if the parent plus delegate cascade still matches that exact set. This
+        lets export-before-delete callers fail closed if a new delegate appears
+        after they materialize their archive. The delegate tree is re-walked
+        inside the write transaction on purpose (TOCTOU guard); the cost is
+        accepted for correctness. Returns True if the session was found and
+        deleted.
         """
         removed_delegate_ids: List[str] = []
+        expected_ids = (
+            set(expected_delete_ids) if expected_delete_ids is not None else None
+        )
 
         def _do(conn):
             cursor = conn.execute(
@@ -8982,6 +9024,13 @@ class SessionDB:
             )
             if cursor.fetchone()[0] == 0:
                 return False
+            if expected_ids is not None:
+                actual_ids = {
+                    session_id,
+                    *_collect_delegate_child_ids(conn, [session_id]),
+                }
+                if actual_ids != expected_ids:
+                    return False
             removed_delegate_ids.extend(_delete_delegate_children(conn, [session_id]))
             # Orphan remaining child sessions (branches, etc.) so FK is satisfied.
             conn.execute(
@@ -10145,6 +10194,34 @@ class SessionDB:
                         "FTS rebuild failed for %s: %s", tbl, exc
                     )
         return rebuilt
+
+    def logical_size_bytes(self) -> Optional[int]:
+        """Database size in bytes as SQLite itself accounts for it.
+
+        ``page_count * page_size`` — the size the main DB file will have once
+        the WAL is checkpointed back into it.
+
+        Prefer this over ``os.path.getsize(db_path)`` when reporting the effect
+        of a VACUUM. In WAL mode a VACUUM's rewrite lands in the ``-wal`` file,
+        and the checkpoint that folds it back is refused while any other
+        connection (a live gateway) holds a read-mark. Until that happens the
+        main file on disk still carries its pre-VACUUM size and keeps growing,
+        so a stat()-based before/after delta understates the win and can go
+        negative — the "reclaimed -3820.1 MB" report on a database that had
+        actually shrunk 60%.
+
+        Returns None if the pragmas cannot be read.
+        """
+        try:
+            with self._lock:
+                if self._conn is None:
+                    return None
+                page_count = self._conn.execute("PRAGMA page_count").fetchone()[0]
+                page_size = self._conn.execute("PRAGMA page_size").fetchone()[0]
+            return int(page_count) * int(page_size)
+        except Exception as exc:
+            logger.debug("Could not read logical DB size: %s", exc)
+            return None
 
     def vacuum(self) -> int:
         """Run VACUUM to reclaim disk space after large deletes.
