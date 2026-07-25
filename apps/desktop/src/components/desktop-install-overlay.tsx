@@ -284,6 +284,7 @@ export function DesktopInstallOverlay({ enabled = true }: DesktopInstallOverlayP
   const lastSetupChoiceRootRef = useRef<string | null>(null)
   const setupChoiceRoot = state.setupChoice?.activeRoot ?? null
   const localStarting = setupChoiceRoot !== null && localStartingRoot === setupChoiceRoot
+
   const localStartErrorMessage =
     setupChoiceRoot !== null && localStartError?.root === setupChoiceRoot ? localStartError.message : null
 
@@ -359,6 +360,7 @@ export function DesktopInstallOverlay({ enabled = true }: DesktopInstallOverlayP
       lastSetupChoiceRootRef.current = null
       setLocalStartingRoot(null)
       setLocalStartError(null)
+
       return
     }
 
@@ -436,6 +438,7 @@ export function DesktopInstallOverlay({ enabled = true }: DesktopInstallOverlayP
               disabled={localStarting}
               onClick={async () => {
                 const choiceRoot = setupChoiceRoot
+
                 if (!choiceRoot) {
                   return
                 }
