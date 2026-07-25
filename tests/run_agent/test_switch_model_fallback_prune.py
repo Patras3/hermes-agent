@@ -28,6 +28,7 @@ def _make_agent(chain):
     agent._anthropic_client = None
     agent._is_anthropic_oauth = False
     agent._cached_system_prompt = "cached"
+    agent._cached_system_prompt_static = "old static prefix"
     agent._primary_runtime = {}
     agent._fallback_activated = False
     agent._fallback_index = 0
@@ -76,6 +77,15 @@ def test_switch_with_empty_chain_stays_empty():
 
     assert agent._fallback_chain == []
     assert agent._fallback_model is None
+
+
+def test_switch_clears_cached_system_prompt_and_static_prefix():
+    agent = _make_agent([])
+
+    _switch_to_anthropic(agent)
+
+    assert agent._cached_system_prompt is None
+    assert agent._cached_system_prompt_static is None
 
 
 def test_switch_initializes_missing_fallback_attrs():
