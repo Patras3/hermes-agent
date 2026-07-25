@@ -12,9 +12,11 @@ Three tiers are joined with ``\\n\\n``:
 * ``stable``   — identity (SOUL.md or DEFAULT_AGENT_IDENTITY), tool
   guidance, computer-use guidance, nous subscription block, tool-use
   enforcement guidance + per-model operational guidance, skills prompt,
-  alibaba model-name workaround, environment hints, platform hints.
+  alibaba model-name workaround, environment hints, coding guidance,
+  platform hints.
 * ``context``  — caller-supplied ``system_message`` plus context files
-  (AGENTS.md / .cursorrules / etc.) discovered under ``TERMINAL_CWD``.
+  (AGENTS.md / .cursorrules / etc.) discovered under ``TERMINAL_CWD``,
+  plus the session's coding-workspace snapshot.
 * ``volatile`` — memory snapshot, USER.md profile, external memory
   provider block, timestamp/session/model/provider line.
 
@@ -145,14 +147,14 @@ def _tui_embedded_pane_clarifier(hint: str) -> str:
 
 
 def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) -> Dict[str, str]:
-    """Assemble the system prompt as three ordered parts.
+    """Assemble the system prompt as three ordered cache tiers.
 
     Returns a dict with three keys:
-      * ``stable``   — identity, tool guidance, skills prompt,
-        environment hints, platform hints, model-family operational
-        guidance.
-      * ``context``  — context files (AGENTS.md, .cursorrules, etc.)
-        and caller-supplied system_message.
+      * ``stable``   — the cross-session-stable prefix, through the coding
+        operating brief when a workspace snapshot follows.
+      * ``context``  — the workspace snapshot followed by the remaining
+        session-stable guidance, context files, and caller-supplied
+        system_message.
       * ``volatile`` — memory snapshot, user profile, external
         memory provider block, timestamp line.
 
