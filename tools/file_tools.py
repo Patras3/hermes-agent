@@ -1063,6 +1063,7 @@ def _get_file_ops(task_id: str = "default") -> ShellFileOperations:
                     "port": config.get("ssh_port", 22),
                     "key": config.get("ssh_key", ""),
                     "persistent": config.get("ssh_persistent", False),
+                    "file_sync_enabled": config.get("file_sync_enabled", True),
                 }
 
             local_config = None

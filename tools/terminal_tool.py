@@ -1441,6 +1441,9 @@ def _get_env_config() -> Dict[str, Any]:
             "TERMINAL_SSH_PERSISTENT",
             os.getenv("TERMINAL_PERSISTENT_SHELL", "true"),
         ).lower() in {"true", "1", "yes"},
+        "file_sync_enabled": os.getenv(
+            "TERMINAL_FILE_SYNC_ENABLED", "true"
+        ).lower() in {"true", "1", "yes"},
         "local_persistent": os.getenv("TERMINAL_LOCAL_PERSISTENT", "false").lower() in {"true", "1", "yes"},
         # Container resource config (applies to docker, singularity, modal,
         # daytona -- ignored for local/ssh)
@@ -1624,6 +1627,8 @@ def _create_environment(env_type: str, image: str, cwd: str, timeout: int,
             key_path=ssh_config.get("key", ""),
             cwd=cwd,
             timeout=timeout,
+            persistent_shell=ssh_config.get("persistent", True),
+            file_sync_enabled=ssh_config.get("file_sync_enabled", True),
         )
 
     else:
@@ -2286,6 +2291,7 @@ def terminal_tool(
                                 "port": config.get("ssh_port", 22),
                                 "key": config.get("ssh_key", ""),
                                 "persistent": config.get("ssh_persistent", False),
+                                "file_sync_enabled": config.get("file_sync_enabled", True),
                             }
 
                         container_config = None
