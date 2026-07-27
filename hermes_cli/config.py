@@ -1234,10 +1234,6 @@ DEFAULT_CONFIG = {
         # Enabled by default for non-local backends (SSH); local is always opt-in
         # via TERMINAL_LOCAL_PERSISTENT env var.
         "persistent_shell": True,
-        # Sync skills/credentials to remote backends and modified files back
-        # to the host on teardown. Disable for durable SSH hosts with slow or
-        # unreliable links where the remote filesystem is authoritative.
-        "file_sync_enabled": True,
     },
 
     "web": {
@@ -7497,7 +7493,6 @@ TERMINAL_CONFIG_ENV_MAP = {
     "docker_orphan_reaper": "TERMINAL_DOCKER_ORPHAN_REAPER",
     "sandbox_dir": "TERMINAL_SANDBOX_DIR",
     "persistent_shell": "TERMINAL_PERSISTENT_SHELL",
-    "file_sync_enabled": "TERMINAL_FILE_SYNC_ENABLED",
 }
 
 

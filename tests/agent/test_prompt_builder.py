@@ -1375,42 +1375,6 @@ class TestEnvironmentHints:
         assert "Linux 6.8.0" in line
         assert "root" in line
 
-    def test_ssh_backend_probe_forwards_sync_and_persistence_flags(self, monkeypatch):
-        """The prompt probe must not silently re-enable expensive SSH setup."""
-        import agent.prompt_builder as _pb
-        import tools.terminal_tool as _tt
-
-        monkeypatch.setenv("TERMINAL_ENV", "ssh")
-        monkeypatch.setenv("TERMINAL_SSH_HOST", "example.com")
-        monkeypatch.setenv("TERMINAL_SSH_USER", "root")
-        monkeypatch.setenv("TERMINAL_PERSISTENT_SHELL", "false")
-        monkeypatch.setenv("TERMINAL_FILE_SYNC_ENABLED", "false")
-        _pb._clear_backend_probe_cache()
-
-        class _FakeEnv:
-            def execute(self, cmd, timeout=None):
-                return {
-                    "returncode": 0,
-                    "output": (
-                        "os=Linux\nkernel=6.8.0\nhome=/root\n"
-                        "cwd=/root\nuser=root\n"
-                    ),
-                }
-
-        captured = {}
-
-        def _fake_create_environment(*, ssh_config=None, **kwargs):
-            captured["ssh_config"] = ssh_config
-            return _FakeEnv()
-
-        monkeypatch.setattr(_tt, "_create_environment", _fake_create_environment)
-
-        line = _pb._probe_remote_backend("ssh")
-
-        assert line is not None
-        assert captured["ssh_config"]["persistent"] is False
-        assert captured["ssh_config"]["file_sync_enabled"] is False
-
     def test_remote_backend_list_covers_known_sandboxes(self):
         """Regression guard: if someone adds a remote backend, they must list it here."""
         import agent.prompt_builder as _pb
