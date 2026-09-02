@@ -3062,13 +3062,15 @@ class TestConcurrentToolExecution:
             assert ("Truncated" in m["content"] or "<persisted-output>" in m["content"])
 
     def test_invoke_tool_dispatches_to_handle_function_call(self, agent):
-        """_invoke_tool should route regular tools through handle_function_call."""
+        """_invoke_tool should route regular tools with both session identities."""
+        agent._gateway_session_key = "voice:android-patryk"
         with patch("run_agent.handle_function_call", return_value="result") as mock_hfc:
             result = agent._invoke_tool("web_search", {"q": "test"}, "task-1")
             mock_hfc.assert_called_once_with(
                 "web_search", {"q": "test"}, "task-1",
                 tool_call_id=None,
                 session_id=agent.session_id,
+                gateway_session_key="voice:android-patryk",
                 turn_id="",
                 api_request_id="",
                 enabled_tools=list(agent.valid_tool_names),
@@ -3079,6 +3081,24 @@ class TestConcurrentToolExecution:
                 tool_request_middleware_trace=[],
             )
             assert result == "result"
+
+    def test_sequential_tool_dispatch_forwards_gateway_session_key(self, agent):
+        agent._gateway_session_key = "voice:android-patryk"
+        tool_call = _mock_tool_call(
+            name="web_search",
+            arguments='{"query":"hello"}',
+            call_id="c-gateway-context",
+        )
+        mock_msg = _mock_assistant_msg(content="", tool_calls=[tool_call])
+
+        with patch("run_agent.handle_function_call", return_value='{"success": true}') as mock_hfc:
+            agent._execute_tool_calls_sequential(mock_msg, [], "task-1")
+
+        assert mock_hfc.call_args.kwargs["session_id"] == agent.session_id
+        assert (
+            mock_hfc.call_args.kwargs["gateway_session_key"]
+            == "voice:android-patryk"
+        )
 
     def test_sequential_tool_callbacks_fire_in_order(self, agent):
         tool_call = _mock_tool_call(name="web_search", arguments='{"query":"hello"}', call_id="c1")

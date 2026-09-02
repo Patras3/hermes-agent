@@ -4687,6 +4687,90 @@ class TestSessionKeyHeader:
     """
 
     @pytest.mark.asyncio
+    async def test_responses_tool_handler_gets_gateway_key_without_replacing_session_id(
+        self, auth_adapter, monkeypatch
+    ):
+        """Exercise /v1/responses through agent tool dispatch into a plugin handler."""
+        import model_tools
+        from agent.agent_runtime_helpers import invoke_tool
+        from tools.registry import ToolRegistry
+
+        captured = {}
+        registry = ToolRegistry()
+
+        def handler(_args, **context):
+            captured.update(context)
+            return json.dumps({"accepted": True})
+
+        registry.register(
+            name="test_api_gateway_context",
+            toolset="test-api-gateway-context",
+            schema={
+                "name": "test_api_gateway_context",
+                "description": "Capture API gateway context.",
+                "parameters": {"type": "object", "properties": {}},
+            },
+            handler=handler,
+        )
+        monkeypatch.setattr(model_tools, "registry", registry)
+
+        class FakeAgent:
+            def __init__(self, *, session_id, gateway_session_key):
+                self.session_id = session_id
+                self._gateway_session_key = gateway_session_key
+                self._current_turn_id = "turn-production-shape"
+                self._current_api_request_id = "request-production-shape"
+                self.valid_tool_names = {"test_api_gateway_context"}
+                self.enabled_toolsets = None
+                self.disabled_toolsets = None
+                self._memory_manager = None
+                self.session_prompt_tokens = 0
+                self.session_completion_tokens = 0
+                self.session_total_tokens = 0
+
+            def run_conversation(self, *, user_message, conversation_history, task_id):
+                tool_result = invoke_tool(
+                    self,
+                    "test_api_gateway_context",
+                    {},
+                    task_id,
+                    tool_call_id="call-production-shape",
+                    pre_tool_block_checked=True,
+                    skip_tool_request_middleware=True,
+                )
+                assert json.loads(tool_result) == {"accepted": True}
+                return {"final_response": "done", "messages": [], "api_calls": 1}
+
+        def create_agent(**kwargs):
+            return FakeAgent(
+                session_id=kwargs["session_id"],
+                gateway_session_key=kwargs["gateway_session_key"],
+            )
+
+        monkeypatch.setattr(auth_adapter, "_create_agent", create_agent)
+        app = _create_app(auth_adapter)
+        async with TestClient(TestServer(app)) as cli:
+            resp = await cli.post(
+                "/v1/responses",
+                headers={
+                    "Authorization": "Bearer sk-secret",
+                    "X-Hermes-Session-Key": "voice:release-shopping",
+                },
+                json={
+                    "model": "hermes-agent",
+                    "input": "Wyczyść kupione z listy zakupów.",
+                },
+            )
+
+        assert resp.status == 200
+        internal_session_id = captured["session_id"]
+        assert str(uuid.UUID(internal_session_id)) == internal_session_id
+        assert internal_session_id != "voice:release-shopping"
+        assert captured["gateway_session_key"] == "voice:release-shopping"
+        assert captured["turn_id"] == "turn-production-shape"
+        assert captured["tool_call_id"] == "call-production-shape"
+
+    @pytest.mark.asyncio
     async def test_session_key_passed_to_agent_and_echoed(self, auth_adapter):
         """X-Hermes-Session-Key reaches _run_agent as gateway_session_key and is echoed back."""
         mock_result = {"final_response": "ok", "messages": [], "api_calls": 1}

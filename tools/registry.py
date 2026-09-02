@@ -27,7 +27,12 @@ from typing import Callable, Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
-_TURN_CONTEXT_KWARGS = frozenset({"turn_id", "tool_call_id", "api_request_id"})
+_OPTIONAL_HANDLER_CONTEXT_KWARGS = frozenset({
+    "gateway_session_key",
+    "turn_id",
+    "tool_call_id",
+    "api_request_id",
+})
 _KEYWORD_PARAMETER_KINDS = frozenset({
     inspect.Parameter.POSITIONAL_OR_KEYWORD,
     inspect.Parameter.KEYWORD_ONLY,
@@ -41,7 +46,7 @@ def _compatible_handler_kwargs(handler: Callable, kwargs: dict) -> dict:
     inside the handler is never mistaken for an incompatible call and retried.
     Existing non-context kwargs retain their historical strict behavior.
     """
-    if not _TURN_CONTEXT_KWARGS.intersection(kwargs):
+    if not _OPTIONAL_HANDLER_CONTEXT_KWARGS.intersection(kwargs):
         return kwargs
 
     try:
@@ -56,7 +61,7 @@ def _compatible_handler_kwargs(handler: Callable, kwargs: dict) -> dict:
         return kwargs
 
     compatible = kwargs.copy()
-    for name in _TURN_CONTEXT_KWARGS:
+    for name in _OPTIONAL_HANDLER_CONTEXT_KWARGS:
         parameter = parameters.get(name)
         if parameter is None or parameter.kind not in _KEYWORD_PARAMETER_KINDS:
             compatible.pop(name, None)
