@@ -1264,6 +1264,7 @@ def handle_function_call(
     tool_request_middleware_trace: Optional[List[Dict[str, Any]]] = None,
     enabled_toolsets: Optional[List[str]] = None,
     disabled_toolsets: Optional[List[str]] = None,
+    gateway_session_key: Optional[str] = None,
 ) -> str:
     """
     Main function call dispatcher that routes calls to the tool registry.
@@ -1272,6 +1273,8 @@ def handle_function_call(
         function_name: Name of the function to call.
         function_args: Arguments for the function.
         task_id: Unique identifier for terminal/browser session isolation.
+        gateway_session_key: Validated stable caller identity, kept separate
+                       from the internal transcript-scoped ``session_id``.
         user_task: The user's original task (for browser_snapshot context).
         enabled_tools: Tool names enabled for this session.  When provided,
                        execute_code uses this list to determine which sandbox
@@ -1400,6 +1403,7 @@ def handle_function_call(
                 task_id=task_id,
                 tool_call_id=tool_call_id,
                 session_id=session_id,
+                gateway_session_key=gateway_session_key,
                 turn_id=turn_id,
                 api_request_id=api_request_id,
                 user_task=user_task,
@@ -1565,6 +1569,7 @@ def handle_function_call(
                         function_name, next_args,
                         task_id=task_id,
                         session_id=session_id,
+                        gateway_session_key=gateway_session_key,
                         turn_id=turn_id,
                         tool_call_id=tool_call_id,
                         api_request_id=api_request_id,
@@ -1576,6 +1581,7 @@ def handle_function_call(
                         function_name, next_args,
                         task_id=task_id,
                         session_id=session_id,
+                        gateway_session_key=gateway_session_key,
                         turn_id=turn_id,
                         tool_call_id=tool_call_id,
                         api_request_id=api_request_id,
