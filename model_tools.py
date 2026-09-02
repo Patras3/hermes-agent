@@ -1178,6 +1178,8 @@ def handle_function_call(
                 task_id=task_id,
                 tool_call_id=tool_call_id,
                 session_id=session_id,
+                turn_id=turn_id,
+                api_request_id=api_request_id,
                 user_task=user_task,
                 enabled_tools=enabled_tools,
                 skip_pre_tool_call_hook=skip_pre_tool_call_hook,
@@ -1310,6 +1312,9 @@ def handle_function_call(
                         function_name, next_args,
                         task_id=task_id,
                         session_id=session_id,
+                        turn_id=turn_id,
+                        tool_call_id=tool_call_id,
+                        api_request_id=api_request_id,
                         enabled_tools=sandbox_enabled,
                     )
             else:
@@ -1318,6 +1323,9 @@ def handle_function_call(
                         function_name, next_args,
                         task_id=task_id,
                         session_id=session_id,
+                        turn_id=turn_id,
+                        tool_call_id=tool_call_id,
+                        api_request_id=api_request_id,
                         user_task=user_task,
                     )
             from hermes_cli.middleware import run_tool_execution_middleware

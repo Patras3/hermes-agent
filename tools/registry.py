@@ -16,6 +16,7 @@ Import chain (circular-import safe):
 
 import ast
 import importlib
+import inspect
 import json
 import logging
 import sys
@@ -25,6 +26,41 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
+
+_TURN_CONTEXT_KWARGS = frozenset({"turn_id", "tool_call_id", "api_request_id"})
+_KEYWORD_PARAMETER_KINDS = frozenset({
+    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+    inspect.Parameter.KEYWORD_ONLY,
+})
+
+
+def _compatible_handler_kwargs(handler: Callable, kwargs: dict) -> dict:
+    """Drop new turn-context kwargs that a legacy handler cannot accept.
+
+    Signature inspection happens before invocation so a ``TypeError`` raised
+    inside the handler is never mistaken for an incompatible call and retried.
+    Existing non-context kwargs retain their historical strict behavior.
+    """
+    if not _TURN_CONTEXT_KWARGS.intersection(kwargs):
+        return kwargs
+
+    try:
+        parameters = inspect.signature(handler).parameters
+    except (TypeError, ValueError):
+        return kwargs
+
+    if any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    ):
+        return kwargs
+
+    compatible = kwargs.copy()
+    for name in _TURN_CONTEXT_KWARGS:
+        parameter = parameters.get(name)
+        if parameter is None or parameter.kind not in _KEYWORD_PARAMETER_KINDS:
+            compatible.pop(name, None)
+    return compatible
 
 
 def _is_registry_register_call(node: ast.AST) -> bool:
@@ -623,12 +659,14 @@ class ToolRegistry:
         entry = self.get_entry(name)
         if not entry:
             return json.dumps({"error": f"Unknown tool: {name}"})
+        handler_kwargs = _compatible_handler_kwargs(entry.handler, kwargs)
         try:
             if entry.is_async:
                 from model_tools import _run_async
-                result = _run_async(entry.handler(args, **kwargs))
+
+                result = _run_async(entry.handler(args, **handler_kwargs))
             else:
-                result = entry.handler(args, **kwargs)
+                result = entry.handler(args, **handler_kwargs)
             return self._normalize_handler_result(name, result)
         except Exception as e:
             logger.exception("Tool %s dispatch error: %s", name, e)
