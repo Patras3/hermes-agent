@@ -4,6 +4,7 @@ import importlib
 import json
 
 import model_tools
+import pytest
 from hermes_cli.plugins import PluginContext, PluginManager, PluginManifest
 from tools.registry import ToolRegistry
 
@@ -14,9 +15,17 @@ _TOOL_SCHEMA = {
     "description": "Capture immutable turn context for dispatch tests.",
     "parameters": {"type": "object", "properties": {}},
 }
+_DISPATCH_CONTEXT = {
+    "task_id": "task-1",
+    "session_id": "session-1",
+    "turn_id": "turn-1",
+    "tool_call_id": "tool-call-1",
+    "api_request_id": "api-request-1",
+    "user_task": "user-task-1",
+}
 
 
-def _register_plugin_tool(monkeypatch, handler) -> None:
+def _register_plugin_tool(monkeypatch, handler, *, is_async=False) -> None:
     registry_module = importlib.import_module("tools.registry")
     registry = ToolRegistry()
     monkeypatch.setattr(registry_module, "registry", registry)
@@ -29,6 +38,7 @@ def _register_plugin_tool(monkeypatch, handler) -> None:
         toolset="plugin_turn_context_test",
         schema=_TOOL_SCHEMA,
         handler=handler,
+        is_async=is_async,
     )
 
 
@@ -44,8 +54,26 @@ def _dispatch(function_name=_TOOL_NAME, function_args=None, **context):
     )
 
 
+def _dispatch_path(via_bridge, **context):
+    if via_bridge:
+        return _dispatch(
+            function_name="tool_call",
+            function_args={"name": _TOOL_NAME, "arguments": {}},
+            enabled_toolsets=["plugin_turn_context_test"],
+            **context,
+        )
+    return _dispatch(**context)
+
+
 def _assert_turn_context(
-    captured, *, task_id, session_id, turn_id, tool_call_id, api_request_id
+    captured,
+    *,
+    task_id,
+    session_id,
+    turn_id,
+    tool_call_id,
+    api_request_id,
+    user_task,
 ):
     context_keys = (
         "task_id",
@@ -61,66 +89,171 @@ def _assert_turn_context(
         "tool_call_id": tool_call_id,
         "api_request_id": api_request_id,
     }
-    assert captured.get("user_task") is None
+    assert captured.get("user_task") == user_task
 
 
-def test_plugin_handler_receives_full_turn_context_without_user_task(monkeypatch):
+@pytest.mark.parametrize("via_bridge", [False, True], ids=["direct", "bridge"])
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+def test_legacy_plugin_handler_ignores_new_turn_context(
+    monkeypatch, via_bridge, is_async
+):
     captured = {}
 
-    def handler(_args, **kwargs):
-        captured.update(kwargs)
-        return json.dumps({"accepted": True})
+    if is_async:
 
-    _register_plugin_tool(monkeypatch, handler)
+        async def async_handler(_args, task_id, session_id, user_task):
+            captured.update(
+                task_id=task_id,
+                session_id=session_id,
+                user_task=user_task,
+            )
+            return json.dumps({"accepted": True})
 
-    result = _dispatch(
-        task_id="task-1",
-        session_id="session-1",
-        turn_id="turn-1",
-        tool_call_id="tool-call-1",
-        api_request_id="api-request-1",
-    )
+        handler = async_handler
+    else:
+
+        def sync_handler(_args, task_id, session_id, user_task):
+            captured.update(
+                task_id=task_id,
+                session_id=session_id,
+                user_task=user_task,
+            )
+            return json.dumps({"accepted": True})
+
+        handler = sync_handler
+
+    _register_plugin_tool(monkeypatch, handler, is_async=is_async)
+
+    result = _dispatch_path(via_bridge, **_DISPATCH_CONTEXT)
 
     assert result == {"accepted": True}
-    _assert_turn_context(
-        captured,
-        task_id="task-1",
-        session_id="session-1",
-        turn_id="turn-1",
-        tool_call_id="tool-call-1",
-        api_request_id="api-request-1",
-    )
+    assert captured == {
+        "task_id": "task-1",
+        "session_id": "session-1",
+        "user_task": "user-task-1",
+    }
 
 
-def test_plugin_handler_receives_turn_context_through_tool_call_bridge(monkeypatch):
+@pytest.mark.parametrize("via_bridge", [False, True], ids=["direct", "bridge"])
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+def test_explicit_plugin_handler_receives_exact_turn_context(
+    monkeypatch, via_bridge, is_async
+):
     captured = {}
 
-    def handler(_args, **kwargs):
-        captured.update(kwargs)
-        return json.dumps({"accepted": True})
+    if is_async:
 
-    _register_plugin_tool(monkeypatch, handler)
+        async def async_handler(
+            _args,
+            task_id,
+            session_id,
+            user_task,
+            turn_id,
+            tool_call_id,
+            api_request_id,
+        ):
+            captured.update(
+                task_id=task_id,
+                session_id=session_id,
+                user_task=user_task,
+                turn_id=turn_id,
+                tool_call_id=tool_call_id,
+                api_request_id=api_request_id,
+            )
+            return json.dumps({"accepted": True})
 
-    result = _dispatch(
-        function_name="tool_call",
-        function_args={"name": _TOOL_NAME, "arguments": {}},
-        task_id="task-bridge",
-        session_id="session-bridge",
-        turn_id="turn-bridge",
-        tool_call_id="tool-call-bridge",
-        api_request_id="api-request-bridge",
-        enabled_toolsets=["plugin_turn_context_test"],
-    )
+        handler = async_handler
+    else:
+
+        def sync_handler(
+            _args,
+            task_id,
+            session_id,
+            user_task,
+            turn_id,
+            tool_call_id,
+            api_request_id,
+        ):
+            captured.update(
+                task_id=task_id,
+                session_id=session_id,
+                user_task=user_task,
+                turn_id=turn_id,
+                tool_call_id=tool_call_id,
+                api_request_id=api_request_id,
+            )
+            return json.dumps({"accepted": True})
+
+        handler = sync_handler
+
+    _register_plugin_tool(monkeypatch, handler, is_async=is_async)
+
+    result = _dispatch_path(via_bridge, **_DISPATCH_CONTEXT)
 
     assert result == {"accepted": True}
-    _assert_turn_context(
-        captured,
-        task_id="task-bridge",
-        session_id="session-bridge",
-        turn_id="turn-bridge",
-        tool_call_id="tool-call-bridge",
-        api_request_id="api-request-bridge",
-    )
+    _assert_turn_context(captured, **_DISPATCH_CONTEXT)
+
+
+@pytest.mark.parametrize("via_bridge", [False, True], ids=["direct", "bridge"])
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+def test_kwargs_plugin_handler_receives_exact_turn_context(
+    monkeypatch, via_bridge, is_async
+):
+    captured = {}
+
+    if is_async:
+
+        async def async_handler(_args, **kwargs):
+            captured.update(kwargs)
+            return json.dumps({"accepted": True})
+
+        handler = async_handler
+    else:
+
+        def sync_handler(_args, **kwargs):
+            captured.update(kwargs)
+            return json.dumps({"accepted": True})
+
+        handler = sync_handler
+
+    _register_plugin_tool(monkeypatch, handler, is_async=is_async)
+
+    result = _dispatch_path(via_bridge, **_DISPATCH_CONTEXT)
+
+    assert result == {"accepted": True}
+    assert captured == _DISPATCH_CONTEXT
+
+
+@pytest.mark.parametrize("via_bridge", [False, True], ids=["direct", "bridge"])
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+def test_plugin_handler_internal_type_error_is_not_retried_or_masked(
+    monkeypatch, via_bridge, is_async
+):
+    calls = 0
+
+    if is_async:
+
+        async def async_handler(_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            raise TypeError("handler-body-sentinel")
+
+        handler = async_handler
+    else:
+
+        def sync_handler(_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            raise TypeError("handler-body-sentinel")
+
+        handler = sync_handler
+
+    _register_plugin_tool(monkeypatch, handler, is_async=is_async)
+
+    result = _dispatch_path(via_bridge, **_DISPATCH_CONTEXT)
+
+    assert calls == 1
+    assert "TypeError: handler-body-sentinel" in result["error"]
 
 
 def test_plugin_handler_preserves_stale_and_cross_turn_boundaries(monkeypatch):

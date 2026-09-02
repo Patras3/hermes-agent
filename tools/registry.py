@@ -17,6 +17,7 @@ Import chain (circular-import safe):
 import ast
 import functools
 import importlib
+import inspect
 import json
 import logging
 import sys
@@ -34,6 +35,12 @@ _MAX_TOOL_ERROR_CHARS = 2048
 _TOOL_ERROR_TRUNCATION_MARKER = "… [truncated]"
 # Logs keep more of the body than the model sees, but still a bounded amount.
 _MAX_LOGGED_ERROR_CHARS = 8192
+
+_TURN_CONTEXT_KWARGS = frozenset({"turn_id", "tool_call_id", "api_request_id"})
+_KEYWORD_PARAMETER_KINDS = frozenset({
+    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+    inspect.Parameter.KEYWORD_ONLY,
+})
 
 
 def _bound_error_text(text: str) -> str:
@@ -69,6 +76,35 @@ def _bound_json_error_result(result: str) -> str:
         return result
     payload["error"] = _bound_error_text(error)
     return json.dumps(payload, ensure_ascii=False)
+
+
+def _compatible_handler_kwargs(handler: Callable, kwargs: dict) -> dict:
+    """Drop new turn-context kwargs that a legacy handler cannot accept.
+
+    Signature inspection happens before invocation so a ``TypeError`` raised
+    inside the handler is never mistaken for an incompatible call and retried.
+    Existing non-context kwargs retain their historical strict behavior.
+    """
+    if not _TURN_CONTEXT_KWARGS.intersection(kwargs):
+        return kwargs
+
+    try:
+        parameters = inspect.signature(handler).parameters
+    except (TypeError, ValueError):
+        return kwargs
+
+    if any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    ):
+        return kwargs
+
+    compatible = kwargs.copy()
+    for name in _TURN_CONTEXT_KWARGS:
+        parameter = parameters.get(name)
+        if parameter is None or parameter.kind not in _KEYWORD_PARAMETER_KINDS:
+            compatible.pop(name, None)
+    return compatible
 
 
 def _is_registry_register_call(node: ast.AST) -> bool:
@@ -1181,12 +1217,14 @@ class ToolRegistry:
         entry = self.get_entry(name, scope=scope)
         if not entry:
             return tool_error(f"Unknown tool: {name}")
+        handler_kwargs = _compatible_handler_kwargs(entry.handler, kwargs)
         try:
             if entry.is_async:
                 from model_tools import _run_async
-                result = _run_async(entry.handler(args, **kwargs))
+
+                result = _run_async(entry.handler(args, **handler_kwargs))
             else:
-                result = entry.handler(args, **kwargs)
+                result = entry.handler(args, **handler_kwargs)
             return self._normalize_handler_result(name, result)
         except Exception as e:
             # exc_info already renders the exception, so keep the message copy bounded.
