@@ -1269,6 +1269,7 @@ DEFAULT_CONFIG = {
         },
         "title_generation": {
             "enabled": True,
+            "mode": "llm",  # "extract" keeps the instant title and skips the auxiliary model
             "provider": "auto",
             "model": "",
             "prefer_fast_model": False,  # opt in to provider fast tier; auto otherwise uses the main model

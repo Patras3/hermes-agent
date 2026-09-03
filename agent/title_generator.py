@@ -184,6 +184,20 @@ def _auto_title_enabled() -> bool:
         return True
 
 
+def _title_generation_mode() -> str:
+    """Return ``llm`` (default) or the zero-model ``extract`` mode."""
+    try:
+        from hermes_cli.config import load_config_readonly
+
+        config = load_config_readonly()
+        title_config = (config.get("auxiliary") or {}).get("title_generation") or {}
+        mode = str(title_config.get("mode") or "llm").strip().lower()
+        return "extract" if mode == "extract" else "llm"
+    except Exception:
+        logger.debug("Failed to read title_generation.mode", exc_info=True)
+        return "llm"
+
+
 def strip_control_wrappers(text: str) -> str:
     """Remove leading machine-authored control wrappers, including nested ones.
 
@@ -269,6 +283,12 @@ def derive_title(user_message: str) -> Optional[str]:
     # First non-empty line: a pasted log or a multi-paragraph brief still gets
     # named after its opening intent.
     line = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
+    if not line:
+        return None
+    # Group-chat adapters prefix user turns with ``[Display name]``. Keep the
+    # speaker label out of deterministic titles while leaving machine markers
+    # such as ``[System note: ...]`` untouched for the titleability guard.
+    line = re.sub(r"^\[[^\]\n:]{1,64}\]\s+", "", line).strip()
     if not line:
         return None
     line = " ".join(line.split())
@@ -370,6 +390,9 @@ def generate_title(
     if not _auto_title_enabled():
         logger.debug("Auto-title skipped: auxiliary.title_generation.enabled=false")
         return None
+
+    if _title_generation_mode() == "extract":
+        return derive_title(user_message)
 
     if runtime_validator is not None:
         try:
@@ -746,6 +769,9 @@ def maybe_auto_title(
         return
 
     apply_instant_title(session_db, session_id, user_message, title_callback)
+
+    if _title_generation_mode() == "extract":
+        return
 
     thread = threading.Thread(
         target=auto_title_session,

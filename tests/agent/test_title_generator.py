@@ -46,6 +46,18 @@ class TestGenerateTitle:
         assert captured_kwargs["task"] == "title_generation"
         assert captured_kwargs["timeout"] is None
 
+    def test_extract_mode_bypasses_llm_and_strips_platform_prefix(self):
+        cfg = {"auxiliary": {"title_generation": {"mode": "extract"}}}
+
+        with (
+            patch("hermes_cli.config.load_config_readonly", return_value=cfg),
+            patch("agent.title_generator.call_llm") as mock_llm,
+        ):
+            title = generate_title("[Patryk] Przygotuj aktualizację forka Hermesa")
+
+        assert title == "Przygotuj aktualizację forka Hermesa"
+        mock_llm.assert_not_called()
+
 
 
     def test_strips_think_blocks(self):
@@ -289,6 +301,26 @@ class TestMaybeAutoTitle:
                 title_callback=None,
                 runtime_validator=None,
             )
+
+    def test_extract_mode_keeps_instant_title_and_skips_upgrade_thread(self, tmp_path):
+        db = SessionDB(tmp_path / "state.db")
+        db.create_session(session_id="sess-1", source="discord")
+        cfg = {"auxiliary": {"title_generation": {"mode": "extract"}}}
+
+        with (
+            patch("hermes_cli.config.load_config_readonly", return_value=cfg),
+            patch("agent.title_generator.auto_title_session") as mock_auto,
+        ):
+            maybe_auto_title(
+                db,
+                "sess-1",
+                "[Patryk] Przygotuj aktualizację forka Hermesa",
+                [],
+            )
+
+        assert db.get_session_title("sess-1") == "Przygotuj aktualizację forka Hermesa"
+        assert db.get_session_title_source("sess-1") == "derived"
+        mock_auto.assert_not_called()
 
     def test_writes_instant_title_before_the_model_runs(self, tmp_path):
         """The derived title lands synchronously — no LLM, no waiting."""
