@@ -322,6 +322,23 @@ class TestMaybeAutoTitle:
         assert db.get_session_title_source("sess-1") == "derived"
         mock_auto.assert_not_called()
 
+    def test_extract_mode_deduplicates_colliding_title_inline(self, tmp_path):
+        db = SessionDB(tmp_path / "state.db")
+        db.create_session(session_id="taken", source="discord")
+        db.set_session_title("taken", "Powtarzalne pytanie")
+        db.create_session(session_id="sess-1", source="discord")
+        cfg = {"auxiliary": {"title_generation": {"mode": "extract"}}}
+
+        with (
+            patch("hermes_cli.config.load_config_readonly", return_value=cfg),
+            patch("agent.title_generator.auto_title_session") as mock_auto,
+        ):
+            maybe_auto_title(db, "sess-1", "Powtarzalne pytanie", [])
+
+        assert db.get_session_title("sess-1") == "Powtarzalne pytanie #2"
+        assert db.get_session_title_source("sess-1") == "derived"
+        mock_auto.assert_not_called()
+
     def test_writes_instant_title_before_the_model_runs(self, tmp_path):
         """The derived title lands synchronously — no LLM, no waiting."""
         db = SessionDB(tmp_path / "state.db")
