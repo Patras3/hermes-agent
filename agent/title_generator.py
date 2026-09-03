@@ -522,12 +522,16 @@ def apply_instant_title(
     session_id: str,
     user_message: str,
     title_callback: Optional[TitleCallback] = None,
+    *,
+    dedupe: bool = False,
 ) -> Optional[str]:
     """Write the derived title synchronously. Cheap enough to run inline.
 
     Returns the title written, or None when nothing was written (no usable
     text, or the session already carries a title of at least ``derived``
-    authority). Never raises: a titling failure must not affect the turn.
+    authority). ``dedupe`` is reserved for zero-model mode, where there is no
+    background title stage to resolve a collision. Never raises: a titling
+    failure must not affect the turn.
     """
     if not session_db or not session_id:
         return None
@@ -538,7 +542,7 @@ def apply_instant_title(
         if not title:
             return None
         persisted = _persist_session_title(
-            session_db, session_id, title, source="derived", dedupe=False
+            session_db, session_id, title, source="derived", dedupe=dedupe
         )
         if persisted and title_callback is not None:
             try:
@@ -768,9 +772,16 @@ def maybe_auto_title(
         logger.debug("Auto-title skipped: auxiliary.title_generation.enabled=false")
         return
 
-    apply_instant_title(session_db, session_id, user_message, title_callback)
+    mode = _title_generation_mode()
+    apply_instant_title(
+        session_db,
+        session_id,
+        user_message,
+        title_callback,
+        dedupe=mode == "extract",
+    )
 
-    if _title_generation_mode() == "extract":
+    if mode == "extract":
         return
 
     thread = threading.Thread(
