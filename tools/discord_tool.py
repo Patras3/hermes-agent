@@ -85,9 +85,39 @@ _CHANNEL_TYPE_NAMES = {
     0: "text", 2: "voice", 4: "category", 5: "announcement", 10: "announcement_thread",
     11: "public_thread", 12: "private_thread", 13: "stage", 15: "forum", 16: "media"}
 
+_CHANNEL_TYPE_IDS = {
+    "text": 0,
+    "voice": 2,
+    "category": 4,
+    "announcement": 5,
+    "stage": 13,
+    "forum": 15,
+    "media": 16,
+}
+
 
 def _channel_type_name(type_id: int) -> str:
     return _CHANNEL_TYPE_NAMES.get(type_id, f"unknown({type_id})")
+
+
+def _channel_type_id(channel_type: Any) -> int:
+    """Resolve a Discord channel type name or numeric ID."""
+    if channel_type in (None, ""):
+        return 0
+    if isinstance(channel_type, int):
+        if channel_type in _CHANNEL_TYPE_NAMES:
+            return channel_type
+    else:
+        raw = str(channel_type).strip().lower()
+        if raw.isdigit():
+            type_id = int(raw)
+            if type_id in _CHANNEL_TYPE_NAMES:
+                return type_id
+        if raw in _CHANNEL_TYPE_IDS:
+            return _CHANNEL_TYPE_IDS[raw]
+    raise ValueError(
+        "Unknown channel_type. Use one of: " + ", ".join(sorted(_CHANNEL_TYPE_IDS))
+    )
 
 
 # ── capability detection (application intents) ──────────────────────────────
@@ -299,6 +329,45 @@ def _list_channels(token: str, guild_id: str, **_kwargs: Any) -> str:
     return json.dumps({"channel_groups": result, "total_channels": sum(len(g["channels"]) for g in result)})
 
 
+def _create_channel(
+    token: str,
+    guild_id: str,
+    name: str,
+    channel_type: Any = "text",
+    parent_id: Optional[str] = None,
+    topic: Optional[str] = None,
+    position: Optional[int] = None,
+    nsfw: bool = False,
+    rate_limit_per_user: int = 0,
+    **_kwargs: Any,
+) -> str:
+    """Create a guild channel or category."""
+    type_id = _channel_type_id(channel_type)
+    body: Dict[str, Any] = {"name": name, "type": type_id}
+    if parent_id:
+        body["parent_id"] = parent_id
+    if topic and type_id in {0, 5, 15, 16}:
+        body["topic"] = topic
+    if position not in (None, ""):
+        body["position"] = int(position)
+    if nsfw:
+        body["nsfw"] = True
+    if rate_limit_per_user:
+        body["rate_limit_per_user"] = int(rate_limit_per_user)
+
+    channel = _discord_request("POST", f"/guilds/{guild_id}/channels", token, body=body)
+    resolved_type = int(channel.get("type", type_id))
+    return json.dumps({
+        "success": True,
+        "channel_id": channel["id"],
+        "name": channel.get("name", name),
+        "type": _channel_type_name(resolved_type),
+        "guild_id": channel.get("guild_id", guild_id),
+        "parent_id": channel.get("parent_id"),
+        "position": channel.get("position"),
+    })
+
+
 def _channel_info(token: str, channel_id: str, **_kwargs: Any) -> str:
     ch = _discord_request("GET", f"/channels/{channel_id}", token)
     return json.dumps({
@@ -395,6 +464,7 @@ _ACTION_MANIFEST = [
     ("list_guilds", _list_guilds, "()", "list servers the bot is in"),
     ("server_info", _server_info, "(guild_id)", "server details + member counts"),
     ("list_channels", _list_channels, "(guild_id)", "all channels grouped by category"),
+    ("create_channel", _create_channel, "(guild_id, name)", "create a text/voice/category channel; optional parent_id/topic"),
     ("channel_info", _channel_info, "(channel_id)", "single channel details"),
     ("list_roles", _list_roles, "(guild_id)", "roles sorted by position"),
     ("member_info", _member_info, "(guild_id, user_id)", "lookup a specific member"),
@@ -479,7 +549,22 @@ _SCHEMA_PROPERTIES: Dict[str, Any] = {
     "role_id": {"type": "string", "description": "Discord role ID."},
     "message_id": {"type": "string", "description": "Discord message ID."},
     "query": {"type": "string", "description": "Member name prefix to search for (search_members)."},
-    "name": {"type": "string", "description": "New thread name (create_thread)."},
+    "name": {"type": "string", "description": "Name for create_channel or create_thread."},
+    "channel_type": {
+        "type": "string",
+        "enum": ["text", "voice", "category", "announcement", "stage", "forum", "media"],
+        "description": "Channel type for create_channel (default text).",
+    },
+    "parent_id": {"type": "string", "description": "Category channel ID for create_channel."},
+    "topic": {"type": "string", "description": "Topic for text-like channels in create_channel."},
+    "position": {"type": "integer", "description": "Position for create_channel."},
+    "nsfw": {"type": "boolean", "description": "NSFW flag for create_channel."},
+    "rate_limit_per_user": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 21600,
+        "description": "Slowmode seconds for create_channel text channels.",
+    },
     "limit": {
         "type": "integer",
         "minimum": 1,
@@ -553,6 +638,7 @@ _ACTION_403_HINT = {
         "Ask the server admin to grant the bot a role that has MANAGE_MESSAGES, or a per-channel overwrite."),
     "unpin_message": f"{_NO_MANAGE_MESSAGES}.",
     "delete_message": f"{_NO_MANAGE_MESSAGES}, or cannot view the channel/message.",
+    "create_channel": "Bot lacks MANAGE_CHANNELS in this server, or cannot create channels in the target category.",
     "create_thread": "Bot lacks CREATE_PUBLIC_THREADS in this channel, or cannot view it.",
     "add_role": (
         f"{_ROLE_HIERARCHY} Roles can only be assigned below the bot's own position in the role hierarchy."),
@@ -581,7 +667,9 @@ def check_discord_tool_requirements() -> bool:
 # ── handlers ─────────────────────────────────────────────────────────────────
 _HANDLER_DEFAULTS = {
     "guild_id": "", "channel_id": "", "user_id": "", "role_id": "", "message_id": "", "query": "",
-    "name": "", "limit": 50, "before": "", "after": "", "auto_archive_duration": 1440}
+    "name": "", "channel_type": "text", "parent_id": "", "topic": "", "position": None,
+    "nsfw": False, "rate_limit_per_user": 0,
+    "limit": 50, "before": "", "after": "", "auto_archive_duration": 1440}
 
 
 def _run_discord_action(action: str, valid_actions: Dict[str, Any], tool_label: str, **params: Any) -> str:
