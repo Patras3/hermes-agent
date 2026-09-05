@@ -1,13 +1,10 @@
 import { contrastRatio, THEME_PRESET_PALETTES, type ThemePresetPalette } from "@hermes/shared";
 import { describe, expect, it } from "vitest";
 
-import { BUILTIN_THEMES, webPresetFromShared } from "./presets";
+import { auroraTheme, BUILTIN_THEMES, webPresetFromShared } from "./presets";
 
 // Every preset the dashboard shares with the desktop must render the shared
-// table's palette, not a private copy — that is the whole point of the table.
-// The second assertion keeps the projection honest: whatever slot the mapping
-// picks as the dashboard's text/primary colour has to stay legible on the
-// canvas it picks, so a future re-mapping cannot silently ship grey-on-grey.
+// table's palette and keep its accent legible against the canvas.
 describe("dashboard presets derive from the shared palette table", () => {
   const shared = Object.keys(BUILTIN_THEMES).filter(
     (name): name is keyof typeof THEME_PRESET_PALETTES => name in THEME_PRESET_PALETTES,
@@ -25,5 +22,14 @@ describe("dashboard presets derive from the shared palette table", () => {
     expect(palette.background.hex).toBe((preset.darkColors ?? preset.colors).background);
     expect(palette.midground.hex).toBe(derived.midground.hex);
     expect(contrastRatio(palette.midground.hex, palette.background.hex)).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe("Aurora dashboard theme", () => {
+  it("is available as a built-in glassmorphic theme", () => {
+    expect(BUILTIN_THEMES.aurora).toBe(auroraTheme);
+    expect(auroraTheme.name).toBe("aurora");
+    expect(auroraTheme.assets?.bg).toContain("radial-gradient");
+    expect(auroraTheme.customCSS).toContain("hermes-aurora-drift");
   });
 });
