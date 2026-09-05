@@ -708,6 +708,7 @@ DEFAULT_CONFIG = {
         # prefer_fast_model opts in to the provider fast tier; auto otherwise = main model.
         "title_generation": {
             "enabled": True,
+            "mode": "llm",  # "extract" keeps the instant title and skips the auxiliary model
             # Note: session_search no longer uses an auxiliary LLM (PR #27590 — single-shape tool returns DB
             # content directly). The old ``auxiliary.session_search.*`` block was removed here. Existing
             # values in user config.yaml files are harmless leftovers and ignored.
