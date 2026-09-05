@@ -115,6 +115,16 @@ def _auto_title_enabled() -> bool:
         return True
 
 
+def _title_generation_mode() -> str:
+    """Return ``llm`` (default) or the zero-model ``extract`` mode."""
+    try:
+        mode = str(_title_config().get("mode") or "llm").strip().lower()
+        return "extract" if mode == "extract" else "llm"
+    except Exception:
+        logger.debug("Failed to read title_generation.mode", exc_info=True)
+        return "llm"
+
+
 def strip_control_wrappers(text: str) -> str:
     """Remove leading control wrappers (nested too) so a slash-command turn reduces to the prose the user typed."""
     current = (text or "").strip()
@@ -160,7 +170,12 @@ def is_titleable_user_message(user_message: str) -> bool:
 
 def derive_title(user_message: str) -> Optional[str]:
     """Instant title: first meaningful line trimmed to a word boundary. No model, never fails."""
-    line = " ".join(_first_line(_summarize_user_message(user_message)).split())
+    line = _first_line(_summarize_user_message(user_message))
+    # Group-chat adapters prefix user turns with ``[Display name]``. Keep the
+    # speaker label out of deterministic titles while preserving machine
+    # markers such as ``[System note: ...]`` for the titleability guard.
+    line = re.sub(r"^\[[^\]\n:]{1,64}\]\s+", "", line).strip()
+    line = " ".join(line.split())
     if len(line) > MAX_DERIVED_TITLE_CHARS:
         cut = line[:MAX_DERIVED_TITLE_CHARS]
         space = cut.rfind(" ")
@@ -246,6 +261,8 @@ def generate_title(
     if not _auto_title_enabled():
         logger.debug("Auto-title skipped: auxiliary.title_generation.enabled=false")
         return None
+    if _title_generation_mode() == "extract":
+        return derive_title(user_message)
     try:
         if runtime_validator is not None and not runtime_validator():
             logger.debug("Title generation skipped: runtime validator returned False")
@@ -333,13 +350,26 @@ def _persist_session_title(session_db, session_id, title, *, source, dedupe=True
         return _set(deduped)
 
 
-def apply_instant_title(session_db, session_id: str, user_message: str, title_callback: Optional[TitleCallback] = None) -> Optional[str]:
-    """Write the derived title inline. Returns it, or None (no usable text, or a ``derived``+ title exists). Never raises."""
+def apply_instant_title(
+    session_db,
+    session_id: str,
+    user_message: str,
+    title_callback: Optional[TitleCallback] = None,
+    *,
+    dedupe: bool = False,
+) -> Optional[str]:
+    """Write the derived title inline. Returns it, or None (no usable text, or a ``derived``+ title exists).
+
+    ``dedupe`` is reserved for zero-model mode, where there is no background
+    title stage to resolve a collision. Never raises.
+    """
     if not session_db or not session_id:
         return None
     try:
         title = derive_title(user_message) if is_titleable_user_message(user_message) else None
-        persisted = _persist_session_title(session_db, session_id, title, source="derived", dedupe=False) if title else None
+        persisted = _persist_session_title(
+            session_db, session_id, title, source="derived", dedupe=dedupe
+        ) if title else None
         if persisted:
             _notify_title(title_callback, persisted, "derived", "Instant-title")
         return persisted
@@ -436,7 +466,16 @@ def maybe_auto_title(
     if not _auto_title_enabled():  # config read after the cheap guards so the file isn't touched every turn
         logger.debug("Auto-title skipped: auxiliary.title_generation.enabled=false")
         return
-    apply_instant_title(session_db, session_id, user_message, title_callback)
+    mode = _title_generation_mode()
+    apply_instant_title(
+        session_db,
+        session_id,
+        user_message,
+        title_callback,
+        dedupe=mode == "extract",
+    )
+    if mode == "extract":
+        return
     threading.Thread(
         target=auto_title_session,
         args=(session_db, session_id, user_message),
