@@ -1,7 +1,7 @@
 import { contrastRatio, THEME_PRESET_PALETTES, type ThemePresetPalette } from "@hermes/shared";
 import { describe, expect, it } from "vitest";
 
-import { auroraTheme, BUILTIN_THEMES, webPresetFromShared } from "./presets";
+import { auroraTheme, BUILTIN_THEMES, defaultTheme, webPresetFromShared } from "./presets";
 
 // Every preset the dashboard shares with the desktop must render the shared
 // table's palette and keep its accent legible against the canvas.
@@ -26,10 +26,16 @@ describe("dashboard presets derive from the shared palette table", () => {
 });
 
 describe("Aurora dashboard theme", () => {
-  it("is available as a built-in glassmorphic theme", () => {
+  it("preserves the selected built-in theme and its visual style", () => {
     expect(BUILTIN_THEMES.aurora).toBe(auroraTheme);
     expect(auroraTheme.name).toBe("aurora");
     expect(auroraTheme.assets?.bg).toContain("radial-gradient");
     expect(auroraTheme.customCSS).toContain("hermes-aurora-drift");
+    expect(contrastRatio(auroraTheme.palette.midground.hex, auroraTheme.palette.background.hex))
+      .toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("does not change the upstream default terminal background", () => {
+    expect(defaultTheme.terminalBackground).toBe("#000000");
   });
 });

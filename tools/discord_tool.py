@@ -101,22 +101,23 @@ def _channel_type_name(type_id: int) -> str:
 
 
 def _channel_type_id(channel_type: Any) -> int:
-    """Resolve a Discord channel type name or numeric ID."""
+    """Resolve only creatable guild channel types, never thread type IDs."""
     if channel_type in (None, ""):
         return 0
-    if isinstance(channel_type, int):
-        if channel_type in _CHANNEL_TYPE_NAMES:
+    creatable_ids = set(_CHANNEL_TYPE_IDS.values())
+    if isinstance(channel_type, int) and not isinstance(channel_type, bool):
+        if channel_type in creatable_ids:
             return channel_type
     else:
         raw = str(channel_type).strip().lower()
         if raw.isdigit():
             type_id = int(raw)
-            if type_id in _CHANNEL_TYPE_NAMES:
+            if type_id in creatable_ids:
                 return type_id
         if raw in _CHANNEL_TYPE_IDS:
             return _CHANNEL_TYPE_IDS[raw]
     raise ValueError(
-        "Unknown channel_type. Use one of: " + ", ".join(sorted(_CHANNEL_TYPE_IDS))
+        "Unknown or unsupported channel_type. Use one of: " + ", ".join(sorted(_CHANNEL_TYPE_IDS))
     )
 
 

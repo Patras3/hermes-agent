@@ -269,6 +269,16 @@ class TestCreateChannel:
             body={"name": "Ops / Dom", "type": 4},
         )
 
+    @patch("tools.discord_tool._discord_request")
+    def test_thread_type_is_rejected_before_post(self, mock_req, monkeypatch):
+        monkeypatch.setenv("DISCORD_BOT_TOKEN", "test-token")
+        for channel_type in (11, "11", 12, "public_thread"):
+            result = json.loads(discord_admin_handler(
+                action="create_channel", guild_id="111", name="wrong", channel_type=channel_type,
+            ))
+            assert "unsupported channel_type" in result["error"]
+        mock_req.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # Action: list_roles
@@ -688,6 +698,17 @@ class TestRuntimeAllowlistEnforcement:
         )
         result = json.loads(discord_admin_handler(action="add_role", guild_id="1", user_id="2", role_id="3"))
         assert "error" in result
+        assert "disabled by config" in result["error"]
+        mock_req.assert_not_called()
+
+    @patch("tools.discord_tool._discord_request")
+    def test_create_channel_not_allowlisted_never_posts(self, mock_req, monkeypatch):
+        monkeypatch.setenv("DISCORD_BOT_TOKEN", "tok")
+        monkeypatch.setattr(
+            "hermes_cli.config.load_config",
+            lambda: {"discord": {"server_actions": "list_channels"}},
+        )
+        result = json.loads(discord_admin_handler(action="create_channel", guild_id="1", name="infra"))
         assert "disabled by config" in result["error"]
         mock_req.assert_not_called()
 

@@ -56,11 +56,35 @@ class TestRegisterAndDispatch:
 
         reg.register(name="narrow", toolset="core", schema=_make_schema("narrow"), handler=narrow)
         reg.register(name="wide", toolset="core", schema=_make_schema("wide"), handler=wide)
-        injected = {"task_id": "t1", "session_id": "s1", "user_task": "do it"}
+        injected = {
+            "task_id": "t1", "session_id": "s1", "user_task": "do it",
+            "gateway_session_key": "discord:g1:c1", "turn_id": "turn-1",
+            "tool_call_id": "call-1", "api_request_id": "req-1",
+        }
         assert json.loads(reg.dispatch("narrow", {}, **injected)) == {"ok": True}
         assert seen["narrow"] == "s1"
         assert json.loads(reg.dispatch("wide", {}, **injected)) == {"ok": True}
         assert seen["wide"] == injected
+
+    def test_dispatch_context_filters_for_async_narrow_handler(self):
+        reg = ToolRegistry()
+        seen = {}
+
+        async def narrow(args, gateway_session_key=None):
+            seen["key"] = gateway_session_key
+            return json.dumps({"ok": True})
+
+        reg.register(
+            name="async_narrow", toolset="core", schema=_make_schema("async_narrow"),
+            handler=narrow, is_async=True,
+        )
+        result = reg.dispatch(
+            "async_narrow", {}, task_id="t1", turn_id="turn-1",
+            gateway_session_key="voice:android-patryk",
+        )
+        assert isinstance(result, str)
+        assert json.loads(result) == {"ok": True}
+        assert seen["key"] == "voice:android-patryk"
 
     def test_register_rejects_non_dict_parameters(self):
         """A list/str ``parameters`` fails at registration, not in a provider request (pi acaa253cc)."""
