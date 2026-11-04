@@ -343,7 +343,7 @@ def _create_channel(
 ) -> str:
     """Create a guild channel or category."""
     type_id = _channel_type_id(channel_type)
-    body: Dict[str, Any] = {"name": name, "type": type_id}
+    body: dict[str, Any] = {"name": name, "type": type_id}
     if parent_id:
         body["parent_id"] = parent_id
     if topic and type_id in {0, 5, 15, 16}:
